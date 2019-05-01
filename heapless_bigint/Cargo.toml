@@ -1,0 +1,8 @@
+[package]
+name = "heapless_bigint"
+version = "0.1.0"
+authors = ["Ferdia McKeogh <ferdia@mckeogh.tech>"]
+edition = "2018"
+
+[dependencies]
+heapless = "0.4.3"

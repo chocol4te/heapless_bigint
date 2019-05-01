@@ -1,0 +1,11 @@
+[package]
+name = "tests"
+version = "0.1.0"
+authors = ["Ferdia McKeogh <ferdia@mckeogh.tech>"]
+edition = "2018"
+
+[dependencies]
+heapless_bigint = { path = "../heapless_bigint" }
+num-bigint = "0.2.2"
+proptest = "0.9.3"
+heapless = "0.4.3"
