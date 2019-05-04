@@ -45,15 +45,14 @@ pub fn biguint_shl<N: ArrayLength<u8>>(n: &BigUint<N>, bits: usize) -> BigUint<N
     BigUint { data }
 }
 
-pub fn biguint_shr<N: ArrayLength<u8>>(mut n: BigUint<N>, bits: usize) -> BigUint<N> {
+pub fn biguint_shr<N: ArrayLength<u8>>(n: &mut BigUint<N>, bits: usize) -> BigUint<N> {
     let n_unit = bits / 8;
+
     if n_unit >= n.data.len() {
         return BigUint::zero();
     }
-    let mut data = {
-        n.data.truncate(n_unit);
-        n.data
-    };
+    let mut data = n.data.clone();
+    data.truncate(n.data.len() - n_unit);
 
     let n_bits = bits % 8;
     if n_bits > 0 {
@@ -65,7 +64,7 @@ pub fn biguint_shr<N: ArrayLength<u8>>(mut n: BigUint<N>, bits: usize) -> BigUin
         }
     }
 
-    BigUint { data: data.clone() }
+    BigUint { data }
 }
 
 pub fn adc(a: u8, b: u8, acc: &mut u16) -> u8 {
@@ -79,30 +78,6 @@ pub fn adc(a: u8, b: u8, acc: &mut u16) -> u8 {
 pub fn sbb(a: u8, b: u8, acc: &mut i16) -> u8 {
     *acc += a as i16;
     *acc -= b as i16;
-    let lo = *acc as u8;
-    *acc >>= 8;
-    lo
-}
-
-pub fn mac_digit(acc: &mut [u8], b: &[u8], c: u8) {
-    if c == 0 {
-        return;
-    }
-
-    let mut carry = 0;
-
-    for i in 0..acc.len() {
-        acc[i] = mac_with_carry(acc[i], b[i], c, &mut carry);
-    }
-
-    if carry != 0 {
-        panic!("BigUint multiplication overflow by {}", carry);
-    }
-}
-
-fn mac_with_carry(a: u8, b: u8, c: u8, acc: &mut u16) -> u8 {
-    *acc += a as u16;
-    *acc += (b as u16) * (c as u16);
     let lo = *acc as u8;
     *acc >>= 8;
     lo
@@ -217,7 +192,13 @@ pub fn div_rem<N: ArrayLength<u8>>(u: &BigUint<N>, d: &BigUint<N>) -> (BigUint<N
     let bn = *b.data.last().unwrap();
     let q_len = a.data.len() - b.data.len() + 1;
     let mut q = BigUint {
-        data: Vec::<u8, N>::new(),
+        data: {
+            let mut data = Vec::<u8, N>::new();
+            for _ in 0..q_len {
+                data.push(0).unwrap();
+            }
+            data
+        },
     };
 
     // We reuse the same temporary to avoid hitting the allocator in our inner loop - this is
@@ -257,7 +238,6 @@ pub fn div_rem<N: ArrayLength<u8>>(u: &BigUint<N>, d: &BigUint<N>) -> (BigUint<N
          * smaller numbers.
          */
         let (mut q0, _) = div_rem_digit(a0, bn);
-
         let mut prod = &BigUint {
             data: b_data.clone(),
         } * &q0;
@@ -273,16 +253,17 @@ pub fn div_rem<N: ArrayLength<u8>>(u: &BigUint<N>, d: &BigUint<N>) -> (BigUint<N
 
         add2(&mut q.data[j..], &q0.data[..]);
         sub2(&mut a.data[j..], &prod.data[..]);
+        a.normalize();
 
         tmp = q0;
     }
 
     debug_assert!(a < b);
 
-    (q, a >> shift)
+    (q.normalized(), a >> shift)
 }
 
-fn __add2(a: &mut [u8], b: &[u8]) -> u8 {
+pub fn __add2(a: &mut [u8], b: &[u8]) -> u8 {
     debug_assert!(a.len() >= b.len());
 
     let mut carry = 0;
@@ -335,4 +316,53 @@ pub fn sub2(a: &mut [u8], b: &[u8]) {
         borrow == 0 && b_hi.iter().all(|x| *x == 0),
         "Cannot subtract b from a because b is larger than a."
     );
+}
+
+pub fn mul3<N: ArrayLength<u8>>(x: &[u8], y: &[u8]) -> BigUint<N> {
+    let mut prod = BigUint {
+        data: {
+            let mut data = Vec::<u8, N>::new();
+            for _ in 0..(x.len() + y.len() + 1) {
+                data.push(0).unwrap();
+            }
+            data
+        },
+    };
+
+    mac3(&mut prod.data[..], x, y);
+    prod.normalized()
+}
+
+fn mac3(acc: &mut [u8], b: &[u8], c: &[u8]) {
+    let (x, y) = if b.len() < c.len() { (b, c) } else { (c, b) };
+    for (i, xi) in x.iter().enumerate() {
+        mac_digit(&mut acc[i..], y, *xi);
+    }
+}
+
+pub fn mac_digit(acc: &mut [u8], b: &[u8], c: u8) {
+    if c == 0 {
+        return;
+    }
+
+    let mut carry = 0;
+    let (a_lo, a_hi) = acc.split_at_mut(b.len());
+
+    for (a, &b) in a_lo.iter_mut().zip(b) {
+        *a = mac_with_carry(*a, b, c, &mut carry);
+    }
+
+    let mut a = a_hi.iter_mut();
+    while carry != 0 {
+        let a = a.next().expect("carry overflow during multiplication!");
+        *a = adc(*a, 0, &mut carry);
+    }
+}
+
+fn mac_with_carry(a: u8, b: u8, c: u8, acc: &mut u16) -> u8 {
+    *acc += a as u16;
+    *acc += (b as u16) * (c as u16);
+    let lo = *acc as u8;
+    *acc >>= 8;
+    lo
 }

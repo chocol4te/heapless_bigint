@@ -10,12 +10,15 @@ use {
     algorithms::*,
     core::{
         cmp::Ordering::{self, Greater, Less},
-        ops::{Add, AddAssign, Mul, MulAssign, Rem, RemAssign, Shl, Shr, Sub, SubAssign},
+        ops::{
+            Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, RemAssign, Shl, Shr, ShrAssign,
+            Sub, SubAssign,
+        },
     },
     heapless::{ArrayLength, Vec},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BigUint<N>
 where
     N: ArrayLength<u8>,
@@ -23,46 +26,12 @@ where
     data: Vec<u8, N>,
 }
 
-impl<N: ArrayLength<u8>> PartialEq for BigUint<N> {
-    fn eq(&self, other: &BigUint<N>) -> bool {
-        self.data.eq(&other.data)
-    }
-}
-
-impl<N: ArrayLength<u8>> Eq for BigUint<N> {}
-
-impl<N: ArrayLength<u8>> PartialOrd for BigUint<N> {
-    fn partial_cmp(&self, other: &BigUint<N>) -> Option<Ordering> {
-        if self.data.len() > other.data.len() {
-            Some(Greater)
-        } else if self.data.len() < other.data.len() {
-            Some(Less)
-        } else {
-            let mut i = self.data.len() - 1;
-
-            while i > 0 {
-                if self.data[i] > other.data[i] {
-                    return Some(Greater);
-                } else if self.data[i] < other.data[i] {
-                    return Some(Less);
-                } else {
-                    i -= 1;
-                }
-            }
-
-            Some(self.data[0].cmp(&other.data[0]))
-        }
-    }
-}
-
-impl<N: ArrayLength<u8>> Ord for BigUint<N> {
-    fn cmp(&self, other: &BigUint<N>) -> Ordering {
-        self.partial_cmp(other).expect("partial_cmp is always Some")
-    }
-}
-
 impl<N: ArrayLength<u8>> BigUint<N> {
     pub fn from_bytes_be(bytes: &[u8]) -> Self {
+        if bytes.len() == 0 {
+            return BigUint::zero();
+        }
+
         let mut data = Vec::<u8, N>::new();
 
         // Change this to return an error
@@ -76,10 +45,14 @@ impl<N: ArrayLength<u8>> BigUint<N> {
             data.push(0).unwrap();
         }
 
-        Self { data }
+        Self { data }.normalized()
     }
 
     pub fn from_bytes_le(bytes: &[u8]) -> Self {
+        if bytes.len() == 0 {
+            return BigUint::zero();
+        }
+
         let mut data = Vec::<u8, N>::new();
 
         // Change this to return an error
@@ -89,7 +62,7 @@ impl<N: ArrayLength<u8>> BigUint<N> {
             data.push(bytes[i]).unwrap();
         }
 
-        Self { data }
+        Self { data }.normalized()
     }
 
     pub fn to_bytes_be(mut self) -> Vec<u8, N> {
@@ -132,6 +105,54 @@ impl<N: ArrayLength<u8>> BigUint<N> {
     }
 }
 
+impl<N: ArrayLength<u8>> PartialEq for BigUint<N> {
+    fn eq(&self, other: &BigUint<N>) -> bool {
+        self.data.eq(&other.data)
+    }
+}
+
+impl<N: ArrayLength<u8>> Eq for BigUint<N> {}
+
+impl<N: ArrayLength<u8>> PartialOrd for BigUint<N> {
+    fn partial_cmp(&self, other: &BigUint<N>) -> Option<Ordering> {
+        if self.data.len() > other.data.len() {
+            Some(Greater)
+        } else if self.data.len() < other.data.len() {
+            Some(Less)
+        } else {
+            let mut i = self.data.len() - 1;
+
+            while i > 0 {
+                if self.data[i] > other.data[i] {
+                    return Some(Greater);
+                } else if self.data[i] < other.data[i] {
+                    return Some(Less);
+                } else {
+                    i -= 1;
+                }
+            }
+
+            Some(self.data[0].cmp(&other.data[0]))
+        }
+    }
+}
+
+impl<N: ArrayLength<u8>> Ord for BigUint<N> {
+    fn cmp(&self, other: &BigUint<N>) -> Ordering {
+        self.partial_cmp(other).expect("partial_cmp is always Some")
+    }
+}
+
+impl<N: ArrayLength<u8>> Clone for BigUint<N> {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+        }
+    }
+}
+
+// Bitshift
+
 impl<'a, N: ArrayLength<u8>> Shl<usize> for &'a BigUint<N> {
     type Output = BigUint<N>;
 
@@ -143,10 +164,18 @@ impl<'a, N: ArrayLength<u8>> Shl<usize> for &'a BigUint<N> {
 impl<N: ArrayLength<u8>> Shr<usize> for BigUint<N> {
     type Output = BigUint<N>;
 
-    fn shr(self, rhs: usize) -> BigUint<N> {
-        biguint_shr(self, rhs)
+    fn shr(mut self, rhs: usize) -> BigUint<N> {
+        biguint_shr(&mut self, rhs)
     }
 }
+
+impl<N: ArrayLength<u8>> ShrAssign<usize> for BigUint<N> {
+    fn shr_assign(&mut self, rhs: usize) {
+        *self = biguint_shr(self, rhs);
+    }
+}
+
+// Add
 
 impl<N: ArrayLength<u8>> Add for BigUint<N> {
     type Output = BigUint<N>;
@@ -157,55 +186,78 @@ impl<N: ArrayLength<u8>> Add for BigUint<N> {
     }
 }
 
-impl<N: ArrayLength<u8>> AddAssign for BigUint<N> {
+impl<'a, N: ArrayLength<u8>> Add for &'a BigUint<N> {
+    type Output = BigUint<N>;
+
+    fn add(self, other: &BigUint<N>) -> BigUint<N> {
+        let mut cloned = self.clone();
+        let other = other.clone();
+        cloned += other;
+        cloned
+    }
+}
+
+impl<'a, N: ArrayLength<u8>> AddAssign<BigUint<N>> for BigUint<N> {
     fn add_assign(&mut self, other: BigUint<N>) {
-        assert!(self.data.capacity() >= other.data.capacity());
-
-        let mut acc: u16 = 0;
-
-        for i in 0..other.data.len() {
-            self.data[i] = adc(self.data[i], other.data[i], &mut acc);
-        }
-
-        if acc != 0 {
-            panic!("BigUint overflow by {}", acc);
+        let self_len = self.data.len();
+        let carry = if self_len < other.data.len() {
+            let lo_carry = __add2(&mut self.data[..], &other.data[..self_len]);
+            self.data
+                .extend_from_slice(&other.data[self_len..])
+                .unwrap();
+            __add2(&mut self.data[self_len..], &[lo_carry])
+        } else {
+            __add2(&mut self.data[..], &other.data[..])
+        };
+        if carry != 0 {
+            self.data.push(carry).unwrap();
         }
     }
 }
+
+impl<'a, 'b, N: ArrayLength<u8>> AddAssign<&'a BigUint<N>> for &'b mut BigUint<N> {
+    fn add_assign(&mut self, other: &BigUint<N>) {
+        let self_len = self.data.len();
+        let carry = if self_len < other.data.len() {
+            let lo_carry = __add2(&mut self.data[..], &other.data[..self_len]);
+            self.data
+                .extend_from_slice(&other.data[self_len..])
+                .unwrap();
+            __add2(&mut self.data[self_len..], &[lo_carry])
+        } else {
+            __add2(&mut self.data[..], &other.data[..])
+        };
+        if carry != 0 {
+            self.data.push(carry).unwrap();
+        }
+    }
+}
+
+// Subtract
 
 impl<N: ArrayLength<u8>> Sub for BigUint<N> {
     type Output = BigUint<N>;
 
     fn sub(mut self, other: BigUint<N>) -> BigUint<N> {
-        self -= other;
+        self -= &other;
         self
     }
 }
 
-impl<N: ArrayLength<u8>> SubAssign<BigUint<N>> for BigUint<N> {
-    fn sub_assign(&mut self, other: BigUint<N>) {
-        assert!(self.data.capacity() >= other.data.capacity());
-
-        let mut acc: i16 = 0;
-
-        for i in 0..other.data.len() {
-            self.data[i] = sbb(self.data[i], other.data[i], &mut acc);
-        }
-
-        if acc != 0 {
-            panic!("BigUint underflow by {}", acc);
-        }
+impl<'a, N: ArrayLength<u8>> SubAssign<&'a BigUint<N>> for BigUint<N> {
+    fn sub_assign(&mut self, other: &'a BigUint<N>) {
+        sub2(&mut self.data[..], &other.data[..]);
+        self.normalize();
     }
 }
 
-impl<'a, N: ArrayLength<u8>> Sub<&'a BigUint<N>> for &'a mut BigUint<N> {
+impl<'a, 'b, N: ArrayLength<u8>> Sub<&'a BigUint<N>> for &'b BigUint<N> {
     type Output = BigUint<N>;
 
-    fn sub(mut self, other: &'a BigUint<N>) -> BigUint<N> {
-        self -= &other;
-        BigUint {
-            data: self.data.clone(),
-        }
+    fn sub(self, other: &'a BigUint<N>) -> BigUint<N> {
+        let mut local = self.clone();
+        local -= &other;
+        local
     }
 }
 
@@ -225,6 +277,8 @@ impl<'a, 'b, N: ArrayLength<u8>> SubAssign<&'a BigUint<N>> for &'b mut BigUint<N
     }
 }
 
+// Multiply
+
 impl<N: ArrayLength<u8>> Mul for BigUint<N> {
     type Output = BigUint<N>;
 
@@ -238,19 +292,7 @@ impl<'a, 'b, N: ArrayLength<u8>> Mul<&'b BigUint<N>> for &'a BigUint<N> {
     type Output = BigUint<N>;
 
     fn mul(self, other: &BigUint<N>) -> BigUint<N> {
-        // Assume self is larger
-        assert!(self.data.capacity() >= other.data.capacity());
-
-        let mut out = Vec::<u8, N>::new();
-        for _ in 0..self.data.len() {
-            out.push(0).unwrap();
-        }
-
-        for (i, xi) in other.data.iter().enumerate() {
-            mac_digit(&mut out[i..], &self.data, *xi);
-        }
-
-        BigUint { data: out }
+        mul3::<N>(&self.data[..], &other.data[..])
     }
 }
 
@@ -260,12 +302,53 @@ impl<'a, N: ArrayLength<u8>> MulAssign<&'a BigUint<N>> for BigUint<N> {
     }
 }
 
+// Divide
+
+impl<'a, 'b, N: ArrayLength<u8>> Div<&'b BigUint<N>> for &'a BigUint<N> {
+    type Output = BigUint<N>;
+
+    #[inline]
+    fn div(self, other: &BigUint<N>) -> BigUint<N> {
+        let (q, _) = div_rem(self, other);
+        q.normalized()
+    }
+}
+
+impl<'a, 'b, N: ArrayLength<u8>> Div for BigUint<N> {
+    type Output = BigUint<N>;
+
+    #[inline]
+    fn div(self, other: BigUint<N>) -> BigUint<N> {
+        let (q, _) = div_rem(&self, &other);
+        q.normalized()
+    }
+}
+
+impl<'a, N: ArrayLength<u8>> DivAssign<&'a BigUint<N>> for BigUint<N> {
+    #[inline]
+    fn div_assign(&mut self, other: &'a BigUint<N>) {
+        *self = &*self / other;
+    }
+}
+
+// Remainder
+
 impl<'a, 'b, N: ArrayLength<u8>> Rem<&'b BigUint<N>> for &'a BigUint<N> {
     type Output = BigUint<N>;
 
     #[inline]
     fn rem(self, other: &BigUint<N>) -> BigUint<N> {
         let (_, r) = div_rem(self, other);
+        r
+    }
+}
+
+impl<N: ArrayLength<u8>> Rem<BigUint<N>> for BigUint<N> {
+    type Output = BigUint<N>;
+
+    #[inline]
+    fn rem(self, other: BigUint<N>) -> BigUint<N> {
+        let (_, r) = div_rem(&self, &other);
         r
     }
 }
@@ -332,20 +415,35 @@ mod tests {
     #[test]
     fn mul() {
         assert_eq!(
-            BigUint::<U4>::from_bytes_be(&[67, 185, 169, 245]),
-            &BigUint::<U4>::from_bytes_be(&[2, 249, 113])
-                * &BigUint::<U4>::from_bytes_be(&[22, 197])
+            BigUint::<U16>::from_bytes_be(&[67, 185, 169, 245]),
+            &BigUint::<U16>::from_bytes_be(&[2, 249, 113])
+                * &BigUint::<U16>::from_bytes_be(&[22, 197])
         )
     }
 
-    /*
+    #[test]
+    fn div() {
+        assert_eq!(
+            BigUint::<U16>::from_bytes_be(&[33]),
+            &BigUint::<U16>::from_bytes_be(&[2, 249, 113])
+                / &BigUint::<U16>::from_bytes_be(&[22, 197])
+        )
+    }
+
+    #[test]
+    fn rem_single() {
+        assert_eq!(
+            BigUint::<U16>::from_bytes_be(&[96]),
+            &BigUint::<U16>::from_bytes_be(&[2, 249, 113]) % &BigUint::<U16>::from_bytes_be(&[197])
+        )
+    }
+
     #[test]
     fn rem() {
         assert_eq!(
-            BigUint::<U4>::from_bytes_be(&[10, 12]),
-            &BigUint::<U4>::from_bytes_be(&[2, 249, 113])
-                % &BigUint::<U4>::from_bytes_be(&[22, 197])
+            BigUint::<U16>::from_bytes_be(&[8, 17]),
+            &BigUint::<U16>::from_bytes_be(&[2, 249, 113])
+                % &BigUint::<U16>::from_bytes_be(&[35, 224])
         )
     }
-    */
 }
